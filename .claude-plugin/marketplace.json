@@ -1,0 +1,22 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "codex-implement",
+  "owner": {
+    "name": "cbzehner",
+    "email": "chris@cbzehner.com"
+  },
+  "plugins": [
+    {
+      "name": "codex-implement",
+      "source": "./",
+      "description": "Delegate code implementation to OpenAI Codex (gpt-5.3-codex) subagents",
+      "version": "0.1.0",
+      "author": {
+        "name": "cbzehner",
+        "email": "chris@cbzehner.com"
+      },
+      "category": "productivity",
+      "homepage": "https://github.com/cbzehner/claude-skill-codex-implement"
+    }
+  ]
+}

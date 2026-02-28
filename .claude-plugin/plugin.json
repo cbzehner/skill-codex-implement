@@ -1,0 +1,11 @@
+{
+  "name": "codex-implement",
+  "description": "Delegate code implementation to OpenAI Codex (gpt-5.3-codex) subagents. Use after plan approval to have Codex write the code via codex exec.",
+  "version": "0.1.0",
+  "author": {
+    "name": "cbzehner",
+    "email": "chris@cbzehner.com"
+  },
+  "repository": "https://github.com/cbzehner/claude-skill-codex-implement",
+  "license": "MIT"
+}
