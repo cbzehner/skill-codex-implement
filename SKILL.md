@@ -1,18 +1,24 @@
 ---
 name: codex-implement
-description: Delegate code implementation to Codex subagents. Use after plan approval to have gpt-5.3-codex write the code. Invoke with /codex-implement or triggered automatically by the post-plan hook.
+description: Delegate code implementation to OpenAI Codex subagents. Use after plan approval to have gpt-5.4 write the code. Use this whenever the user wants to parallelize implementation, delegate coding to Codex, or execute a multi-file plan.
 allowed-tools: Bash, Read, Glob, Grep, Task, Edit, Write
 ---
 
 # Codex Implement
 
-Delegate code implementation to OpenAI Codex (gpt-5.3-codex) via subagents.
+Delegate code implementation to OpenAI Codex (gpt-5.4) via subagents.
 
 ## Usage
 
 `/codex-implement` — reads the current plan from context and delegates implementation steps to Codex subagents.
 
 If no plan is in context, ask the user what to implement.
+
+## When NOT to Use
+
+- **Single-file changes** — just implement directly, spawning subagents adds overhead
+- **Exploratory work** — Codex needs clear intent; use for implementation, not investigation
+- **Test-only changes** — write tests yourself where you can verify behavior inline
 
 ## Protocol
 
@@ -49,12 +55,13 @@ Task:
     1. First, read all files that will be modified or referenced using the Read tool
     2. Run this Bash command to have Codex implement the changes:
 
-       codex exec -m gpt-5.3-codex --sandbox full-auto -- "[detailed prompt including:
+       codex exec -m gpt-5.4 --sandbox full-auto -- "[detailed prompt including:
          - what to implement
          - which files to create/modify
          - relevant type signatures and interfaces
          - coding conventions to follow
-         - DO NOT include test files unless explicitly part of this step]"
+         - DO NOT include test files unless explicitly part of this step
+           (tests need to verify behavior, which requires the implementation to exist first)]"
 
     3. After codex completes, verify the changes:
        - Read modified files to confirm they exist and look correct
@@ -113,7 +120,5 @@ Present a summary to the user:
 
 ## Notes
 
-- Codex runs with `--sandbox full-auto` — it writes files directly to the repo
-- Model is pinned to `gpt-5.3-codex` for frontier code quality
-- Each subagent has its own context window — pass sufficient context in the prompt
-- The main conversation stays clean — implementation details live in subagents
+- Codex runs with `--sandbox full-auto` so it writes files directly to the repo — verify changes after each step
+- Each subagent has its own context window, so pass sufficient context (types, interfaces, conventions) in the prompt rather than assuming it knows the codebase
