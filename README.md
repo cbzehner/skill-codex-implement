@@ -31,7 +31,7 @@ Reads the current plan from conversation context and delegates implementation. I
 ### From Marketplace
 
 ```bash
-/plugin marketplace add cbzehner/claude-skill-codex-implement
+/plugin marketplace add cbzehner/skill-codex-implement
 /plugin install codex-implement@cbzehner
 ```
 
@@ -39,7 +39,7 @@ Reads the current plan from conversation context and delegates implementation. I
 
 ```bash
 cd ~/.claude/skills/
-git clone https://github.com/cbzehner/claude-skill-codex-implement.git codex-implement
+git clone https://github.com/cbzehner/skill-codex-implement.git codex-implement
 ```
 
 ## Requirements
