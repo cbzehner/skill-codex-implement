@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex Implement"
+  short_description: "Delegate multi-file implementation to Codex workers"
+  default_prompt: "Use $codex-implement to execute this approved implementation plan with Codex workers."

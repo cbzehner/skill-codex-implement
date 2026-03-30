@@ -8,6 +8,12 @@ allowed-tools: Bash, Read, Glob, Grep, Task, Edit, Write
 
 Delegate code implementation to OpenAI Codex via subagents.
 
+## Host Check
+
+If the current host IS Codex, this skill is unnecessary — implement the plan
+directly rather than delegating through an extra layer. This skill exists for
+Claude Code to orchestrate Codex workers, not for Codex to call itself.
+
 ## Usage
 
 `/codex-implement` — reads the current plan from context and delegates implementation steps to Codex subagents.
