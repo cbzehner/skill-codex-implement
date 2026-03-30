@@ -1,12 +1,12 @@
 ---
 name: codex-implement
-description: Delegate code implementation to OpenAI Codex subagents. Use after plan approval to have gpt-5.4 write the code. Use this whenever the user wants to parallelize implementation, delegate coding to Codex, or execute a multi-file plan.
+description: Delegate code implementation to OpenAI Codex subagents. Use after plan approval to have Codex write the code. Use this whenever the user wants to parallelize implementation, delegate coding to Codex, or execute a multi-file plan.
 allowed-tools: Bash, Read, Glob, Grep, Task, Edit, Write
 ---
 
 # Codex Implement
 
-Delegate code implementation to OpenAI Codex (gpt-5.4) via subagents.
+Delegate code implementation to OpenAI Codex via subagents.
 
 ## Usage
 
@@ -20,29 +20,49 @@ If no plan is in context, ask the user what to implement.
 - **Exploratory work** — Codex needs clear intent; use for implementation, not investigation
 - **Test-only changes** — write tests yourself where you can verify behavior inline
 
+## Context Layering
+
+Do not stuff all context into the `codex exec` prompt. Pass it in layers:
+
+1. **Repo norms** — maintain an `AGENTS.md` at the repo root with coding conventions, style rules, and architecture notes. Codex reads these automatically before each task.
+2. **Task spec** — for non-trivial steps, write a brief spec to a temp file (e.g. `tmp/codex-step-N.md`) and reference it in the prompt rather than inlining everything.
+3. **File scope** — list target files, tests to run, and files NOT to touch explicitly in the prompt.
+4. **Hard constraints** — state them directly: "no new deps", "preserve public API", "stop after minimal fix".
+
 ## Protocol
 
-### 1. Extract Implementation Steps
+### 1. Consider TDD-First
+
+Before delegating implementation, consider writing tests first:
+- Opus writes tests based on the architectural plan (it understands intent better)
+- Codex implements code to make those tests pass (it has a concrete success criterion)
+- When using TDD-first, include the test files in the spec so Codex can read them as its behavioral contract
+- This is optional for trivial steps but strongly recommended for core logic
+
+### 2. Extract Implementation Steps
 
 Read the plan from the current conversation context. Break it into independent implementation steps. Each step should be a self-contained unit of work that modifies a small set of files.
 
-### 2. Spawn Subagents
+### 3. Spawn Subagents
 
 For each implementation step, spawn a **Task subagent** (`subagent_type: "general-purpose"`) that:
 
 1. Reads relevant existing files for context
 2. Runs `codex exec` with the step's prompt
-3. Verifies the changes (file exists, no syntax errors)
-4. Reports what was changed
+3. Reviews the `git diff` to verify changes
+4. Runs build/check commands
+5. Reports what was changed
 
 **Maximize parallelism** — launch independent steps concurrently. Only serialize steps that have dependencies.
 
-### 3. Subagent Prompt Template
+**Worktree isolation** — for steps touching 3+ files, use `isolation: "worktree"` on the Agent call to give Codex an isolated git worktree. This prevents race conditions when parallel subagents touch adjacent files or shared manifests.
 
-Each Task subagent should follow this pattern:
+### 4. Subagent Prompt Template
+
+Each subagent should follow this pattern (use `Agent` with `subagent_type: "general-purpose"`; for steps touching 3+ files, add `isolation: "worktree"`):
 
 ```
-Task:
+Agent:
   subagent_type: "general-purpose"
   prompt: |
     You are implementing a specific step of a plan using OpenAI Codex.
@@ -53,23 +73,37 @@ Task:
 
     **Instructions**:
     1. First, read all files that will be modified or referenced using the Read tool
-    2. Run this Bash command to have Codex implement the changes:
+    2. Capture the base SHA: run `git rev-parse HEAD`
+    3. Determine the repo root: `repo_root=$(git rev-parse --show-toplevel)`
+    4. Write the implementation spec to a temp file:
 
-       codex exec -m gpt-5.4 --sandbox full-auto -- "[detailed prompt including:
-         - what to implement
-         - which files to create/modify
-         - relevant type signatures and interfaces
-         - coding conventions to follow
-         - DO NOT include test files unless explicitly part of this step
-           (tests need to verify behavior, which requires the implementation to exist first)]"
+       step_dir=$(mktemp -d)
+       cat > "$step_dir/spec.md" << 'SPEC'
+       [detailed spec including:
+        - what to implement
+        - which files to create/modify
+        - relevant type signatures and interfaces
+        - if TDD-first: reference the test files Codex should make pass
+        - hard constraints: no new deps, preserve API, etc.]
+       SPEC
 
-    3. After codex completes, verify the changes:
-       - Read modified files to confirm they exist and look correct
+    5. Run Codex:
+
+       codex -a never exec \
+         -C "$repo_root" \
+         --sandbox workspace-write \
+         --ephemeral \
+         -o "$step_dir/output.txt" \
+         - < "$step_dir/spec.md"
+
+    6. After Codex completes, review the changes:
+       - Run `git diff "$base_sha" -- [target files]` to see exactly what changed
        - Run any relevant build/check commands (cargo check, tsc --noEmit, etc.)
-    4. If codex made errors, either:
+       - Read `$step_dir/output.txt` for Codex's summary
+    7. If Codex made errors, either:
        - Fix them directly with Edit tool for small issues
-       - Re-run codex with a more specific prompt for larger issues
-    5. Report back: which files were modified and a brief summary of changes
+       - Re-run Codex with a narrower prompt that includes the error output (1 retry max)
+    8. Report back: the git diff summary, files modified, build status, and any risks
 
     **Important**:
     - If codex exec fails with permission denied, STOP and report the error
@@ -77,16 +111,17 @@ Task:
     - Prefer precise, scoped prompts over broad "implement everything" prompts
 ```
 
-### 4. Verify All Changes
+### 5. Verify All Changes
 
 After all subagents complete:
 
-1. Run the project's build command to verify compilation
-2. Run tests if they exist
-3. Summarize all changes made across all steps
-4. Flag any steps that failed or produced suspicious output
+1. Run `git diff` from before the first subagent to see the full picture
+2. Run the project's build command to verify compilation
+3. Run tests if they exist
+4. Summarize all changes made across all steps
+5. Flag any steps that failed or produced suspicious output
 
-### 5. Report
+### 6. Report
 
 Present a summary to the user:
 
@@ -114,11 +149,18 @@ Present a summary to the user:
 | Error | Action |
 |-------|--------|
 | Permission denied on codex exec | STOP — tell user to add `"Bash(codex *)"` to permissions |
-| Codex produces wrong code | Retry with more specific prompt (1 retry max), then report |
-| Build fails after codex changes | Report failure with error details, do not attempt auto-fix |
+| Codex produces wrong code | Retry once with narrower prompt + error output as context, then report |
+| Build fails after codex changes | Report failure with error details; subagent may attempt small Edit fixes but should not re-run codex |
 | Step dependency missing | Serialize that step after its dependency completes |
+| Repo trust / git check failure | Ensure `-C "$repo_root"` points to a valid git repo, or add `--skip-git-repo-check` |
+| Auth / network failure | Verify API key is set and network is reachable; codex exec itself needs network even in workspace-write sandbox |
+| Timeout / hang | Use `timeout 300` wrapper or Bash timeout parameter to prevent zombie subagents |
 
 ## Notes
 
-- Codex runs with `--sandbox full-auto` so it writes files directly to the repo — verify changes after each step
-- Each subagent has its own context window, so pass sufficient context (types, interfaces, conventions) in the prompt rather than assuming it knows the codebase
+- Codex runs with `--sandbox workspace-write` so it writes files directly to the repo (`.git`, `.codex`, `.agents` are protected read-only) — verify changes via `git diff` after each step
+- Each subagent has its own context window — use the Context Layering approach (AGENTS.md + temp spec files + scoped prompts) rather than inlining everything
+- Sandboxed commands lack network, but `codex exec` itself needs network to reach the OpenAI API — this is a hard prerequisite
+- `codex exec` expects a git repo unless you pass `--skip-git-repo-check`
+- Use `--ephemeral` to prevent session file accumulation from parallel subagent runs
+- The global approval flag (`-a never`) goes **before** the `exec` subcommand, not after
