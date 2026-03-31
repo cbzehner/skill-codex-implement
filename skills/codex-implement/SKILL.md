@@ -1,7 +1,7 @@
 ---
 name: codex-implement
 description: Delegate code implementation to OpenAI Codex subagents. Use after plan approval to have Codex write the code. Use this whenever the user wants to parallelize implementation, delegate coding to Codex, or execute a multi-file plan.
-allowed-tools: Bash, Read, Glob, Grep, Task, Edit, Write
+allowed-tools: Bash, Read, Glob, Grep, Task, Edit, Write, Skill
 ---
 
 # Codex Implement
@@ -13,6 +13,25 @@ Delegate code implementation to OpenAI Codex via subagents.
 If the current host IS Codex, this skill is unnecessary — implement the plan
 directly rather than delegating through an extra layer. This skill exists for
 Claude Code to orchestrate Codex workers, not for Codex to call itself.
+
+## Transport Detection
+
+Detect which Codex transport is available. Prefer the plugin when installed —
+it uses the Codex App Server (persistent connection, thread resume, better error
+handling) instead of one-shot CLI invocations.
+
+```bash
+# Check for Codex plugin companion script
+CODEX_COMPANION="${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/plugins/cache/openai-codex/codex}/scripts/codex-companion.mjs"
+if [ -f "$CODEX_COMPANION" ] 2>/dev/null; then
+  echo "plugin"
+else
+  # Fall back to codex exec
+  command -v codex >/dev/null 2>&1 && echo "cli" || echo "none"
+fi
+```
+
+Set `CODEX_TRANSPORT` to `plugin` or `cli` for use in subagent prompts.
 
 ## Usage
 
@@ -28,7 +47,7 @@ If no plan is in context, ask the user what to implement.
 
 ## Context Layering
 
-Do not stuff all context into the `codex exec` prompt. Pass it in layers:
+Do not stuff all context into the prompt. Pass it in layers:
 
 1. **Repo norms** — maintain an `AGENTS.md` at the repo root with coding conventions, style rules, and architecture notes. Codex reads these automatically before each task.
 2. **Task spec** — for non-trivial steps, write a brief spec to a temp file (e.g. `tmp/codex-step-N.md`) and reference it in the prompt rather than inlining everything.
@@ -54,7 +73,7 @@ Read the plan from the current conversation context. Break it into independent i
 For each implementation step, spawn a **Task subagent** (`subagent_type: "general-purpose"`) that:
 
 1. Reads relevant existing files for context
-2. Runs `codex exec` with the step's prompt
+2. Runs Codex with the step's prompt (via plugin or CLI)
 3. Reviews the `git diff` to verify changes
 4. Runs build/check commands
 5. Reports what was changed
@@ -76,6 +95,7 @@ Agent:
     **Step**: [step description]
     **Files to modify**: [list of files]
     **Context**: [relevant architectural context, types, interfaces]
+    **Codex transport**: [plugin or cli]
 
     **Instructions**:
     1. First, read all files that will be modified or referenced using the Read tool
@@ -93,8 +113,16 @@ Agent:
         - hard constraints: no new deps, preserve API, etc.]
        SPEC
 
-    5. Run Codex:
+    5. Run Codex using the detected transport:
 
+       **If plugin available:**
+       node "[companion script path]" task \
+         --cwd "$repo_root" \
+         --write \
+         --json \
+         "$(cat $step_dir/spec.md)"
+
+       **If CLI fallback:**
        codex -a never exec \
          -C "$repo_root" \
          --sandbox workspace-write \
@@ -105,15 +133,14 @@ Agent:
     6. After Codex completes, review the changes:
        - Run `git diff "$base_sha" -- [target files]` to see exactly what changed
        - Run any relevant build/check commands (cargo check, tsc --noEmit, etc.)
-       - Read `$step_dir/output.txt` for Codex's summary
     7. If Codex made errors, either:
        - Fix them directly with Edit tool for small issues
        - Re-run Codex with a narrower prompt that includes the error output (1 retry max)
     8. Report back: the git diff summary, files modified, build status, and any risks
 
     **Important**:
-    - If codex exec fails with permission denied, STOP and report the error
-    - If codex produces clearly wrong output, do NOT commit it — report the issue
+    - If Codex fails with permission denied, STOP and report the error
+    - If Codex produces clearly wrong output, do NOT commit it — report the issue
     - Prefer precise, scoped prompts over broad "implement everything" prompts
 ```
 
@@ -124,8 +151,12 @@ After all subagents complete:
 1. Run `git diff` from before the first subagent to see the full picture
 2. Run the project's build command to verify compilation
 3. Run tests if they exist
-4. Summarize all changes made across all steps
-5. Flag any steps that failed or produced suspicious output
+4. **If the Codex plugin is installed**, run `/codex:review` for a Codex-native review of all changes. This catches issues that the build/test pass might miss.
+5. Summarize all changes made across all steps
+6. Flag any steps that failed or produced suspicious output
+
+For high-stakes implementations, consider `/codex:adversarial-review` instead —
+it actively challenges design decisions and surfaces hidden assumptions.
 
 ### 6. Report
 
@@ -142,6 +173,9 @@ Present a summary to the user:
 ### Build Status
 [pass/fail + details]
 
+### Codex Review
+[summary from /codex:review if available, or "Plugin not installed — manual review"]
+
 ### Files Modified
 - `path/to/file.rs` — [what changed]
 - `path/to/other.rs` — [what changed]
@@ -154,19 +188,20 @@ Present a summary to the user:
 
 | Error | Action |
 |-------|--------|
-| Permission denied on codex exec | STOP — tell user to add `"Bash(codex *)"` to permissions |
+| Permission denied on codex | STOP — tell user to add `"Bash(codex *)"` to permissions |
 | Codex produces wrong code | Retry once with narrower prompt + error output as context, then report |
 | Build fails after codex changes | Report failure with error details; subagent may attempt small Edit fixes but should not re-run codex |
 | Step dependency missing | Serialize that step after its dependency completes |
 | Repo trust / git check failure | Ensure `-C "$repo_root"` points to a valid git repo, or add `--skip-git-repo-check` |
-| Auth / network failure | Verify API key is set and network is reachable; codex exec itself needs network even in workspace-write sandbox |
+| Auth / network failure | Verify API key is set and network is reachable; codex needs network even in workspace-write sandbox |
 | Timeout / hang | Use `timeout 300` wrapper or Bash timeout parameter to prevent zombie subagents |
+| Plugin companion not found | Fall back to `codex exec` CLI transport |
 
 ## Notes
 
-- Codex runs with `--sandbox workspace-write` so it writes files directly to the repo (`.git`, `.codex`, `.agents` are protected read-only) — verify changes via `git diff` after each step
+- Codex runs with `--sandbox workspace-write` (CLI) or `--write` (plugin) so it writes files directly to the repo — verify changes via `git diff` after each step
 - Each subagent has its own context window — use the Context Layering approach (AGENTS.md + temp spec files + scoped prompts) rather than inlining everything
-- Sandboxed commands lack network, but `codex exec` itself needs network to reach the OpenAI API — this is a hard prerequisite
+- Sandboxed commands lack network, but Codex itself needs network to reach the OpenAI API — this is a hard prerequisite
 - `codex exec` expects a git repo unless you pass `--skip-git-repo-check`
-- Use `--ephemeral` to prevent session file accumulation from parallel subagent runs
-- The global approval flag (`-a never`) goes **before** the `exec` subcommand, not after
+- When using CLI transport: use `--ephemeral` to prevent session file accumulation; the global approval flag (`-a never`) goes **before** the `exec` subcommand
+- When using plugin transport: the companion script manages the app server connection; multiple subagents share the broker for connection reuse
