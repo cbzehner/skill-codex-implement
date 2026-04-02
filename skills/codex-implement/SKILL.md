@@ -194,7 +194,7 @@ Present a summary to the user:
 | Step dependency missing | Serialize that step after its dependency completes |
 | Repo trust / git check failure | Ensure `-C "$repo_root"` points to a valid git repo, or add `--skip-git-repo-check` |
 | Auth / network failure | Verify API key is set and network is reachable; codex needs network even in workspace-write sandbox |
-| Timeout / hang | Use `timeout 300` wrapper or Bash timeout parameter to prevent zombie subagents |
+| Timeout / hang | Use `timeout 300` wrapper or Bash timeout parameter to prevent zombie subagents. Always redirect `< /dev/null` for `codex exec` — inside subagents, stdin is an open pipe that never sends EOF, causing codex to hang forever |
 | Plugin companion not found | Fall back to `codex exec` CLI transport |
 
 ## Notes
