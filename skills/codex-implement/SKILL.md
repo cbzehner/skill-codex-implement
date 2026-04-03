@@ -14,24 +14,13 @@ If the current host IS Codex, this skill is unnecessary — implement the plan
 directly rather than delegating through an extra layer. This skill exists for
 Claude Code to orchestrate Codex workers, not for Codex to call itself.
 
-## Transport Detection
+## Transport
 
-Detect which Codex transport is available. Prefer the plugin when installed —
-it uses the Codex App Server (persistent connection, thread resume, better error
-handling) instead of one-shot CLI invocations.
-
-```bash
-# Check for Codex plugin companion script
-CODEX_COMPANION="${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/plugins/cache/openai-codex/codex}/scripts/codex-companion.mjs"
-if [ -f "$CODEX_COMPANION" ] 2>/dev/null; then
-  echo "plugin"
-else
-  # Fall back to codex exec
-  command -v codex >/dev/null 2>&1 && echo "cli" || echo "none"
-fi
-```
-
-Set `CODEX_TRANSPORT` to `plugin` or `cli` for use in subagent prompts.
+Always invoke Codex through [codex-adapter.sh](codex-adapter.sh). The adapter
+prefers the companion plugin (HTTP transport to Codex app-server — persistent
+connection, thread resume, better error handling) and falls back to
+`codex exec < /dev/null` with a timeout. Never call `codex exec` directly —
+it hangs in subagent environments where stdin is an open pipe.
 
 ## Usage
 
@@ -194,7 +183,7 @@ Present a summary to the user:
 | Step dependency missing | Serialize that step after its dependency completes |
 | Repo trust / git check failure | Ensure `-C "$repo_root"` points to a valid git repo, or add `--skip-git-repo-check` |
 | Auth / network failure | Verify API key is set and network is reachable; codex needs network even in workspace-write sandbox |
-| Timeout / hang | Use `timeout 300` wrapper or Bash timeout parameter to prevent zombie subagents. Always redirect `< /dev/null` for `codex exec` — inside subagents, stdin is an open pipe that never sends EOF, causing codex to hang forever |
+| Timeout / hang | Use codex-adapter.sh — it handles stdin redirection and timeouts. Never call `codex exec` directly in subagent contexts |
 | Plugin companion not found | Fall back to `codex exec` CLI transport |
 
 ## Notes
