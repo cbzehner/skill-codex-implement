@@ -1,7 +1,8 @@
 ---
 name: codex-implement
 description: Delegate code implementation to OpenAI Codex subagents. Use after plan approval to have Codex write the code. Use this whenever the user wants to parallelize implementation, delegate coding to Codex, or execute a multi-file plan.
-allowed-tools: Bash, Read, Glob, Grep, Task, Edit, Write, Skill
+license: MIT
+allowed-tools: Bash Read Glob Grep Task Edit Write Skill
 ---
 
 # Codex Implement
