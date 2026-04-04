@@ -2,6 +2,7 @@
 name: codex-implement
 description: Delegate code implementation to OpenAI Codex subagents. Use after plan approval to have Codex write the code. Use this whenever the user wants to parallelize implementation, delegate coding to Codex, or execute a multi-file plan.
 license: MIT
+effort: high
 allowed-tools: Bash Read Glob Grep Task Edit Write Skill
 ---
 
@@ -136,17 +137,44 @@ Agent:
 
 ### 5. Verify All Changes
 
-After all subagents complete:
+After all subagents complete, verify the implementation independently. Your job
+here is not to confirm it works — it's to try to break it.
+
+**Anti-rationalization check.** You will feel the urge to skip verification.
+These are the exact excuses you reach for — recognize them and do the opposite:
+- "The code looks correct based on reading the diff" — reading is not verification. Run the build.
+- "Codex's own tests pass" — Codex is an LLM. Its tests may be circular or happy-path only. Verify independently.
+- "This is probably fine" — probably is not verified. Run it.
+- "This would take too long" — not your call. The user asked for implementation, not a guess.
+
+If you catch yourself writing an explanation instead of running a command, stop. Run the command.
+
+**Required verification steps:**
 
 1. Run `git diff` from before the first subagent to see the full picture
-2. Run the project's build command to verify compilation
-3. Run tests if they exist
-4. **If the Codex plugin is installed**, run `/codex:review` for a Codex-native review of all changes. This catches issues that the build/test pass might miss.
-5. Summarize all changes made across all steps
-6. Flag any steps that failed or produced suspicious output
+2. Run the project's build command. A broken build is an automatic failure — do not rationalize it away
+3. Run the full test suite. Failing tests are an automatic failure
+4. Run linters/type-checkers if configured (eslint, tsc, mypy, cargo clippy, etc.)
+5. **Try to break it**: pick at least one adversarial probe that fits the change type:
+   - Boundary inputs (empty, null, very long, unicode)
+   - Error paths (missing files, invalid config, network down)
+   - Idempotency (run the same operation twice — does it break?)
+6. **If the Codex plugin is installed**, run `/codex:review` for independent review
 
-For high-stakes implementations, consider `/codex:adversarial-review` instead —
-it actively challenges design decisions and surfaces hidden assumptions.
+**Structured verification output:**
+
+For each check, record:
+```
+### Check: [what you verified]
+**Command**: [exact command run]
+**Result**: PASS or FAIL — [what you observed]
+```
+
+If all your checks are "build passes" and "tests pass", you have confirmed the
+happy path, not verified correctness. Go back and try to break something.
+
+End with: `VERIFICATION: PASS`, `VERIFICATION: FAIL`, or `VERIFICATION: PARTIAL`
+(partial only for environmental limitations, not uncertainty).
 
 ### 6. Report
 
