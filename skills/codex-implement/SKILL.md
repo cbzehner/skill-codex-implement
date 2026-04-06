@@ -1,6 +1,6 @@
 ---
 name: codex-implement
-description: Delegate code implementation to OpenAI Codex subagents. Use after plan approval to have Codex write the code. Use this whenever the user wants to parallelize implementation, delegate coding to Codex, or execute a multi-file plan.
+description: Delegate code implementation to OpenAI Codex subagents. Use after plan approval to parallelize implementation or execute a multi-file plan.
 license: MIT
 effort: high
 allowed-tools: Bash Read Glob Grep Task Edit Write Skill
@@ -8,21 +8,13 @@ allowed-tools: Bash Read Glob Grep Task Edit Write Skill
 
 # Codex Implement
 
-Delegate code implementation to OpenAI Codex via subagents.
-
 ## Host Check
 
-If the current host IS Codex, this skill is unnecessary — implement the plan
-directly rather than delegating through an extra layer. This skill exists for
-Claude Code to orchestrate Codex workers, not for Codex to call itself.
+If the current host IS Codex, implement the plan directly — do not delegate through an extra layer.
 
 ## Transport
 
-Always invoke Codex through [codex-adapter.sh](codex-adapter.sh). The adapter
-prefers the companion plugin (HTTP transport to Codex app-server — persistent
-connection, thread resume, better error handling) and falls back to
-`codex exec < /dev/null` with a timeout. Never call `codex exec` directly —
-it hangs in subagent environments where stdin is an open pipe.
+Always invoke Codex through [codex-adapter.sh](codex-adapter.sh) (prefers companion plugin, falls back to CLI with timeout). Never call `codex exec` directly — it hangs when stdin is an open pipe.
 
 ## Usage
 
@@ -38,22 +30,18 @@ If no plan is in context, ask the user what to implement.
 
 ## Context Layering
 
-Do not stuff all context into the prompt. Pass it in layers:
+Do not stuff all context into the prompt. Layer it:
 
-1. **Repo norms** — maintain an `AGENTS.md` at the repo root with coding conventions, style rules, and architecture notes. Codex reads these automatically before each task.
-2. **Task spec** — for non-trivial steps, write a brief spec to a temp file (e.g. `tmp/codex-step-N.md`) and reference it in the prompt rather than inlining everything.
-3. **File scope** — list target files, tests to run, and files NOT to touch explicitly in the prompt.
-4. **Hard constraints** — state them directly: "no new deps", "preserve public API", "stop after minimal fix".
+1. **Repo norms** — `AGENTS.md` at repo root (Codex reads this automatically)
+2. **Task spec** — write to a temp file (`tmp/codex-step-N.md`), reference in prompt
+3. **File scope** — list target files, tests, and files NOT to touch
+4. **Hard constraints** — state directly: "no new deps", "preserve public API", etc.
 
 ## Protocol
 
 ### 1. Consider TDD-First
 
-Before delegating implementation, consider writing tests first:
-- Opus writes tests based on the architectural plan (it understands intent better)
-- Codex implements code to make those tests pass (it has a concrete success criterion)
-- When using TDD-first, include the test files in the spec so Codex can read them as its behavioral contract
-- This is optional for trivial steps but strongly recommended for core logic
+For non-trivial steps, write tests first — Codex then implements against a concrete success criterion. Include the test files in the spec so Codex reads them as its behavioral contract.
 
 ### 2. Extract Implementation Steps
 
@@ -75,151 +63,42 @@ For each implementation step, spawn a **Task subagent** (`subagent_type: "genera
 
 ### 4. Subagent Prompt Template
 
-Each subagent should follow this pattern (use `Agent` with `subagent_type: "general-purpose"`; for steps touching 3+ files, add `isolation: "worktree"`):
-
-```
-Agent:
-  subagent_type: "general-purpose"
-  prompt: |
-    You are implementing a specific step of a plan using OpenAI Codex.
-
-    **Step**: [step description]
-    **Files to modify**: [list of files]
-    **Context**: [relevant architectural context, types, interfaces]
-    **Codex transport**: [plugin or cli]
-
-    **Instructions**:
-    1. First, read all files that will be modified or referenced using the Read tool
-    2. Capture the base SHA: run `git rev-parse HEAD`
-    3. Determine the repo root: `repo_root=$(git rev-parse --show-toplevel)`
-    4. Write the implementation spec to a temp file:
-
-       step_dir=$(mktemp -d)
-       cat > "$step_dir/spec.md" << 'SPEC'
-       [detailed spec including:
-        - what to implement
-        - which files to create/modify
-        - relevant type signatures and interfaces
-        - if TDD-first: reference the test files Codex should make pass
-        - hard constraints: no new deps, preserve API, etc.]
-       SPEC
-
-    5. Run Codex using the detected transport:
-
-       **If plugin available:**
-       node "[companion script path]" task \
-         --cwd "$repo_root" \
-         --write \
-         --json \
-         "$(cat $step_dir/spec.md)"
-
-       **If CLI fallback:**
-       codex -a never exec \
-         -C "$repo_root" \
-         --sandbox workspace-write \
-         --ephemeral \
-         -o "$step_dir/output.txt" \
-         - < "$step_dir/spec.md"
-
-    6. After Codex completes, review the changes:
-       - Run `git diff "$base_sha" -- [target files]` to see exactly what changed
-       - Run any relevant build/check commands (cargo check, tsc --noEmit, etc.)
-    7. If Codex made errors, either:
-       - Fix them directly with Edit tool for small issues
-       - Re-run Codex with a narrower prompt that includes the error output (1 retry max)
-    8. Report back: the git diff summary, files modified, build status, and any risks
-
-    **Important**:
-    - If Codex fails with permission denied, STOP and report the error
-    - If Codex produces clearly wrong output, do NOT commit it — report the issue
-    - Prefer precise, scoped prompts over broad "implement everything" prompts
-```
+Follow the template in [references/subagent-prompt.md](references/subagent-prompt.md). Key points: use `codex-adapter.sh` (not raw `codex exec`), capture base SHA before running, review `git diff` after, 1 retry max on errors.
 
 ### 5. Verify All Changes
 
-After all subagents complete, verify the implementation independently. Your job
-here is not to confirm it works — it's to try to break it.
+Your job is to try to break it, not confirm it works. If you catch yourself writing an explanation instead of running a command, stop and run the command.
 
-**Anti-rationalization check.** You will feel the urge to skip verification.
-These are the exact excuses you reach for — recognize them and do the opposite:
-- "The code looks correct based on reading the diff" — reading is not verification. Run the build.
-- "Codex's own tests pass" — Codex is an LLM. Its tests may be circular or happy-path only. Verify independently.
+**Anti-rationalization check** — recognize these excuses and do the opposite:
+- "The code looks correct from the diff" — reading is not verification. Run the build.
+- "Codex's own tests pass" — its tests may be circular. Verify independently.
 - "This is probably fine" — probably is not verified. Run it.
 - "This would take too long" — not your call. The user asked for implementation, not a guess.
 
-If you catch yourself writing an explanation instead of running a command, stop. Run the command.
+**Required steps:**
 
-**Required verification steps:**
+1. `git diff` from before the first subagent to see the full picture
+2. Build command — broken build is an automatic failure
+3. Full test suite — failing tests are an automatic failure
+4. Linters/type-checkers if configured
+5. At least one adversarial probe: boundary inputs, error paths, or idempotency
+6. `/codex:review` if the Codex plugin is installed
 
-1. Run `git diff` from before the first subagent to see the full picture
-2. Run the project's build command. A broken build is an automatic failure — do not rationalize it away
-3. Run the full test suite. Failing tests are an automatic failure
-4. Run linters/type-checkers if configured (eslint, tsc, mypy, cargo clippy, etc.)
-5. **Try to break it**: pick at least one adversarial probe that fits the change type:
-   - Boundary inputs (empty, null, very long, unicode)
-   - Error paths (missing files, invalid config, network down)
-   - Idempotency (run the same operation twice — does it break?)
-6. **If the Codex plugin is installed**, run `/codex:review` for independent review
-
-**Structured verification output:**
-
-For each check, record:
-```
-### Check: [what you verified]
-**Command**: [exact command run]
-**Result**: PASS or FAIL — [what you observed]
-```
-
-If all your checks are "build passes" and "tests pass", you have confirmed the
-happy path, not verified correctness. Go back and try to break something.
-
-End with: `VERIFICATION: PASS`, `VERIFICATION: FAIL`, or `VERIFICATION: PARTIAL`
-(partial only for environmental limitations, not uncertainty).
+For each check, state the exact command run and its observed result. End with: `VERIFICATION: PASS`, `VERIFICATION: FAIL`, or `VERIFICATION: PARTIAL`.
 
 ### 6. Report
 
-Present a summary to the user:
-
-```
-## Codex Implementation Summary
-
-### Steps Completed
-- [x] Step 1: [description] — [files changed]
-- [x] Step 2: [description] — [files changed]
-- [ ] Step 3: [description] — FAILED: [reason]
-
-### Build Status
-[pass/fail + details]
-
-### Codex Review
-[summary from /codex:review if available, or "Plugin not installed — manual review"]
-
-### Files Modified
-- `path/to/file.rs` — [what changed]
-- `path/to/other.rs` — [what changed]
-
-### Issues
-- [any problems encountered]
-```
+Summarize for the user: steps completed with their status (with files changed), build/test status, verification result, and any issues. Include the `/codex:review` summary if the plugin was available.
 
 ## Error Handling
 
-| Error | Action |
-|-------|--------|
-| Permission denied on codex | STOP — tell user to add `"Bash(codex *)"` to permissions |
-| Codex produces wrong code | Retry once with narrower prompt + error output as context, then report |
-| Build fails after codex changes | Report failure with error details; subagent may attempt small Edit fixes but should not re-run codex |
-| Step dependency missing | Serialize that step after its dependency completes |
-| Repo trust / git check failure | Ensure `-C "$repo_root"` points to a valid git repo, or add `--skip-git-repo-check` |
-| Auth / network failure | Verify API key is set and network is reachable; codex needs network even in workspace-write sandbox |
-| Timeout / hang | Use codex-adapter.sh — it handles stdin redirection and timeouts. Never call `codex exec` directly in subagent contexts |
-| Plugin companion not found | Fall back to `codex exec` CLI transport |
+- **Permission denied** → STOP, tell user to add `"Bash(codex *)"` to permissions
+- **Wrong code** → retry once with narrower prompt + error output, then report
+- **Build fails** → report failure; subagent may attempt small Edit fixes but should not re-run Codex
+- **Auth / network failure** → Codex needs network even in workspace-write sandbox; verify API key is set
 
 ## Notes
 
-- Codex runs with `--sandbox workspace-write` (CLI) or `--write` (plugin) so it writes files directly to the repo — verify changes via `git diff` after each step
-- Each subagent has its own context window — use the Context Layering approach (AGENTS.md + temp spec files + scoped prompts) rather than inlining everything
-- Sandboxed commands lack network, but Codex itself needs network to reach the OpenAI API — this is a hard prerequisite
+- Codex writes files directly to the repo — always verify via `git diff`
+- CLI transport: use `--ephemeral` to prevent session file accumulation; `-a never` goes **before** the `exec` subcommand
 - `codex exec` expects a git repo unless you pass `--skip-git-repo-check`
-- When using CLI transport: use `--ephemeral` to prevent session file accumulation; the global approval flag (`-a never`) goes **before** the `exec` subcommand
-- When using plugin transport: the companion script manages the app server connection; multiple subagents share the broker for connection reuse

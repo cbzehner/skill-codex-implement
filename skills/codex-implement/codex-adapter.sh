@@ -26,5 +26,5 @@ if COMPANION="$(find_companion)"; then
   timeout 300 node "$COMPANION" task "$PROMPT" < /dev/null
 else
   >&2 echo "[codex-adapter] transport: codex exec CLI"
-  timeout 300 codex exec --sandbox read-only --skip-git-repo-check -- "$PROMPT" < /dev/null
+  timeout 300 codex -a never exec --sandbox workspace-write --ephemeral --skip-git-repo-check -- "$PROMPT" < /dev/null
 fi
