@@ -1,6 +1,11 @@
 ---
 name: codex-implement
-description: Delegate code implementation to OpenAI Codex subagents. Use after plan approval to parallelize implementation or execute a multi-file plan.
+description: >-
+  Delegate code implementation to the OpenAI Codex CLI as an external
+  subprocess. Use when the user explicitly wants Codex, GPT-5, an OpenAI coding
+  model, a non-Claude model, or codex-adapter.sh to implement code or execute a
+  plan. Prefer this over Claude subagents for Codex-specific delegation. Do not
+  use merely because the task mentions OpenAI APIs, docs, or products.
 license: MIT
 effort: high
 allowed-tools: Bash Read Glob Grep Task Edit Write Skill
